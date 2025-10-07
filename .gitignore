@@ -1,0 +1,62 @@
+from pathlib import Path
+
+gitignore = """# ---- Python basics ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ---- App-specific artifacts ----
+# Local SQLite database (keep data local, don't commit)
+ebay_tracker.db
+*.sqlite
+*.sqlite3
+*.db
+
+# Streamlit cache/config (keep secrets out of repo)
+.streamlit/secrets.toml
+.streamlit/**/secrets.toml
+.streamlit/**/credentials.toml
+
+# CSV exports/imports (you can un-ignore specific examples if needed)
+listings.csv
+eBay*.csv
+*.log
+
+# Local data dumps
+data/
+exports/
+output/
+
+# ---- Editor / OS clutter ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# dotenv files (API keys, tokens)
+.env
+.env.*
+"""
+
+Path("/mnt/data/.gitignore").write_text(gitignore, encoding="utf-8")
+"/mnt/data/.gitignore"
