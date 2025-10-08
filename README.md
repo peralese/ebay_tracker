@@ -1,184 +1,169 @@
-# eBay Listing Tracker (MVP)
+# 🛒 eBay Listing Tracker
 
-A lightweight Streamlit + SQLite app to track your eBay listings **separately** from your auction/receipt projects.
-
-- Add/edit listings (SKU, title, price, etc.)
-- Mark items **Sold** and auto-calc **Net Profit**
-- Track **views, watchers, bids, relist count**
-- **Import** from eBay Seller Hub CSV (Active/Sold) — case‑insensitive column mapping
-- **Export** all rows to CSV anytime
-- Persistent local DB (`ebay_tracker.db`) that survives restarts
-- KPI cards: Active Listings | Sold | Gross Sales | Net Profit
+The **eBay Listing Tracker** is a local Streamlit-based app for managing your eBay listings database.  
+It allows you to import eBay CSV exports, track listing status, update metrics, and maintain a clean, deduplicated dataset.
 
 ---
 
-## Quick Start
+## 🚀 Features
 
-```bash
-# 1) (Recommended) create & activate a virtual environment
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
+### 🔄 Import & Data Management
+- **Import eBay exports** (e.g., *All Active Listings* reports).
+- **Safe Import System**:
+  - Manual **Import** button to avoid accidental re-imports.
+  - **MD5 hash tracking** to prevent duplicate uploads.
+  - **Unique index** on `(ebay_item_id, sku)` to ensure duplicates are ignored.
+- Supports both **Active Listings** and (future) **Orders/Sold** reports.
+- Data stored locally in a lightweight **SQLite** database (`ebay_tracker.db`).
 
-# 2) Install deps
-pip install streamlit pandas
+### 🧩 Corrected Active Listings Handling
+- Active Listings files now correctly import as **`status = listed`**.
+- The app **no longer misclassifies** active items as sold.
+- “Sold” and “Gross/Net Sales” counters only update for listings manually marked as sold or imported from future “Orders” reports.
 
-# 3) Run the app
-streamlit run ebay_tracker_app.py
-```
+### 📊 Dashboard & KPIs
+- **Active Listings** count.
+- **Sold Listings** count.
+- **Gross Sales** and **Net Profit** (computed from sold data).
+- Auto-calculated metrics for:
+  - Fees
+  - Shipping (buyer/seller)
+  - Cost of goods
+  - Profit margins
 
-The app will create `ebay_tracker.db` in the working folder on first run.
+### 🧮 Add / Edit Listings
+- Add or edit listing details such as:
+  - SKU, Title, Category, Condition, Status, Dates, Prices, URLs
+  - Views, Watchers, Bids, Relist count
+  - Cost of goods, eBay fees, Notes
+- All changes automatically saved to the database.
 
----
+### ⚙️ Quick Actions
+- **Update metrics** — Add views, watchers, bids, or set fees & costs.
+- **Mark as Sold** — Convert a listing to sold, track buyer/order/shipping.
+- **Relist** — Reset status to `listed` and increment relist count.
+- **Delete Selected** — Remove listings permanently.
 
-## Import from eBay Seller Hub (Option A)
-
-1. In **Seller Hub → Listings → Active**, click **Download → CSV** (you can also export Sold later).
-2. In the app’s **sidebar**, use **Import CSV (App template or eBay export)** and select your CSV.
-3. The importer normalizes eBay headers to the app schema (case‑insensitive).
-
-### Headers this importer recognizes
-
-| App field | eBay CSV header candidates (any of these) |
-|---|---|
-| `ebay_item_id` | `Item number`, `Item ID`, `ItemID`, `Item Id` |
-| `sku` | `Custom label (SKU)`, `Custom label`, `Custom Label (SKU)`, `CustomLabel`, `SKU` |
-| `title` | `Title` |
-| `list_date` | `Start date`, `Start Date`, `Start time`, `Start Time`, `Creation Date` |
-| `list_price` | `Current price`, `Start price`, `Start Price`, `Price` |
-| `bin_price` | `Auction Buy It Now price`, `Buy It Now Price`, `BIN Price`, `Buy It Now price` |
-| `views` | `Views`, `View Count` |
-| `watchers` | `Watchers` |
-| `bids` | `Bids` |
-| `quantity` | `Available quantity`, `Quantity`, `Quantity Available`, `Quantity Listed` |
-| `item_url` | `Item URL`, `URL`, `View Item URL`, `Item URL link` |
-| (sold/order fields) | `Sold Price`, `Sold For`, `Order ID`, `Sale Date`, etc. |
-
-> If your export has different column names, add them to the mapping in `map_ebay_export_to_schema()` — it’s case‑insensitive and easy to extend.
-
----
-
-## Common Tasks
-
-- **Add/Update**: Left pane → fill form → **Save**.
-- **Mark Sold**: Right pane → **Mark as sold** → enter price, buyer shipping, buyer/order info → **Mark selected as sold**.
-- **Relist**: Right pane → **Relist selected** (bumps `relist_count`, resets status/date).
-- **Adjust Metrics/Fees**: Right pane → **Update metrics / fees / costs** (views/watchers/bids/fees/COGS/shipping).
-- **Filter**: Sidebar quick filters by `status`, `category`, `SKU`.
-- **Export**: Sidebar → **Export CSV**.
+### 🧹 Maintenance Tools
+Built-in one-click cleanup under the **Maintenance** section:
+- **Fix Statuses**: Resets incorrect “sold” statuses to `listed` for active items.
+- **De-duplicate Listings**: Keeps the lowest ID per `(ebay_item_id, sku)` pair and removes duplicates.
+- Ensures database consistency without needing external scripts.
 
 ---
 
-## Data Model (SQLite table `listings`)
-
-Key fields (subset):
-- Identity: `id (PK)`, `ebay_item_id`, `sku`, `title`, `category`, `condition`
-- Lifecycle: `status (draft|listed|sold|returned|archived)`, `list_date`, `relist_count`
-- Pricing: `list_price`, `bin_price`, `sold_price`, `tax_collected`
-- Shipping/Fees: `shipping_cost_buyer`, `shipping_cost_seller`, `ebay_fees`, `cost_of_goods`
-- Metrics: `views`, `watchers`, `bids`, `quantity`
-- Links: `item_url`, `photo_urls`
-- Outcome: `sold_date`, `buyer_username`, `order_id`
-- Bookkeeping: `last_updated`
-- **Computed (UI only):** `net_profit = sold_price + shipping_cost_buyer − shipping_cost_seller − ebay_fees − cost_of_goods`
-
-> The app persists data in `ebay_tracker.db` via `PRAGMA journal_mode=WAL` for stability during use.
-
----
-
-## Database Migration (keep your data)
-
-If you created `ebay_tracker.db` **before** we added new columns (e.g., `ebay_item_id`) you may see:
+## 📂 Project Structure
 
 ```
-sqlite3.OperationalError: table listings has no column named ebay_item_id
-```
-
-**Two fixes:**
-
-**A) Quick reset (fastest):**
-- Stop the app, delete or rename `ebay_tracker.db`, restart, and re‑import your CSV.
-
-**B) In‑place migration (keeps existing rows):**
-Add this helper and call it at startup (already present in recent full drops):
-
-```python
-def migrate_listings_table(conn):
-    cur = conn.execute("PRAGMA table_info(listings);")
-    existing = {row[1] for row in cur.fetchall()}
-
-    def add(coldef: str):
-        conn.execute(f"ALTER TABLE listings ADD COLUMN {coldef};")
-
-    needed = [
-        ("ebay_item_id", "TEXT"),
-        ("last_updated", "TEXT"),
-        ("shipping_cost_buyer", "REAL DEFAULT 0.0"),
-        ("shipping_cost_seller", "REAL DEFAULT 0.0"),
-        ("ebay_fees", "REAL DEFAULT 0.0"),
-        ("tax_collected", "REAL DEFAULT 0.0"),
-        ("cost_of_goods", "REAL DEFAULT 0.0"),
-        ("views", "INTEGER DEFAULT 0"),
-        ("watchers", "INTEGER DEFAULT 0"),
-        ("bids", "INTEGER DEFAULT 0"),
-        ("quantity", "INTEGER DEFAULT 1"),
-        ("relist_count", "INTEGER DEFAULT 0"),
-        ("photo_urls", "TEXT"),
-        ("notes", "TEXT"),
-    ]
-    for name, decl in needed:
-        if name not in existing:
-            add(f"{name} {decl}")
-
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_ebay_item_id ON listings(ebay_item_id);")
-    conn.commit()
-```
-
-Then in `get_conn()`:
-
-```python
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute(SCHEMA)
-    migrate_listings_table(conn)   # <-- ensure this is called
-    return conn
+ebay_tracker_app.py     # Streamlit app
+ebay_tracker.db         # SQLite database (auto-created)
+README.md               # This file
 ```
 
 ---
 
-## Roadmap
+## 🧠 How to Use
 
-- **Option B: Direct eBay API Sync (read‑only)**  
-  - OAuth refresh token flow  
-  - Pull **active listings** (Trading API `GetMyeBaySelling` or Sell Inventory API)  
-  - Pull **orders** (Sell Fulfillment) → auto‑mark sold  
-  - Pull **traffic** (Sell Analytics) → watchers/views enrichment  
-  - Store `ebay_item_id` and upsert by that key
+1. **Run the App**
+   ```bash
+   streamlit run ebay_tracker_app.py
+   ```
 
-- **Reports & Alerts**  
-  - Stale listings, monthly P&L, category profitability
+2. **Import Your eBay CSV**
+   - Click **Browse files** and select your `All Active Listings` export from eBay.
+   - Click **Import this file**.
+   - The app will import new listings (duplicates ignored).
+   - You’ll see a confirmation message:
+     > ✅ Imported 122 listings (duplicates ignored).
 
-- **Fee presets**  
-  - % + fixed values per category or store level
+3. **View and Filter Listings**
+   - Use sidebar filters for `Status`, `Category`, or `SKU`.
+   - Listings will appear in the table on the right.
+
+4. **Add / Edit Listings**
+   - Switch between **Add new** and **Edit existing**.
+   - Fill or update listing details.
+   - Click **Save**.
+
+5. **Quick Actions**
+   - **Mark as Sold** → Manually mark listings as sold.
+   - **Relist selected** → Reactivate sold or archived listings.
+   - **Update metrics / fees / costs** → Adjust views, watchers, or eBay fees.
+
+6. **Maintenance**
+   - **Fix Statuses**: Correct legacy imported statuses.
+   - **De-duplicate Listings**: Remove duplicate entries if any remain.
 
 ---
 
-## Troubleshooting
+## 🧱 Database Schema
 
-- **Import says 0 rows** → Check the first line of your CSV has headers. Ensure you downloaded “CSV” (not Excel) and that the file isn’t empty/filtered.
-- **Missing columns** → Add their names to the mapping array in `map_ebay_export_to_schema()` (case‑insensitive).
-- **DB locked** → Close extra Streamlit tabs/instances; WAL mode usually avoids this.
-- **Windows emoji in text** → If you see encoding oddities, re‑save the CSV as UTF‑8 or try downloading again.
+| Field | Type | Description |
+|-------|------|-------------|
+| id | INTEGER | Primary key |
+| sku | TEXT | eBay SKU |
+| title | TEXT | Listing title |
+| category | TEXT | eBay category |
+| condition | TEXT | Item condition |
+| status | TEXT | `listed`, `sold`, `draft`, etc. |
+| list_date | TEXT | Date listed |
+| list_price | REAL | Starting price |
+| bin_price | REAL | Buy-It-Now price |
+| sold_price | REAL | Sale price |
+| sold_date | TEXT | Date sold |
+| buyer_username | TEXT | Buyer ID |
+| order_id | TEXT | eBay order number |
+| shipping_cost_buyer | REAL | Shipping charged to buyer |
+| shipping_cost_seller | REAL | Seller-paid shipping |
+| ebay_fees | REAL | eBay fees |
+| tax_collected | REAL | Tax collected |
+| cost_of_goods | REAL | Cost of goods sold |
+| views | INTEGER | Page views |
+| watchers | INTEGER | Watchers |
+| bids | INTEGER | Number of bids |
+| quantity | INTEGER | Quantity |
+| relist_count | INTEGER | Relist counter |
+| item_url | TEXT | eBay listing URL |
+| photo_urls | TEXT | Optional image URLs |
+| notes | TEXT | Notes or remarks |
+| last_updated | TEXT | Auto timestamp |
+| ebay_item_id | TEXT | eBay item number |
 
 ---
 
-## License
+## 🧩 Recent Updates (2025-10-07)
 
-MIT License. Use freely, modify, and share!
+| Change | Description |
+|--------|--------------|
+| ✅ Safe Import System | Added MD5-hash detection, manual import button, and `INSERT OR IGNORE` logic |
+| ✅ Unique Index | Enforced unique `(ebay_item_id, sku)` per listing |
+| ✅ Correct Active Listings Detection | Detects “All Active Listings” exports and sets all items to `status='listed'` |
+| ✅ Maintenance UI | Added Fix Statuses and De-duplicate buttons inside the app |
+| ✅ Fixed KPI Calculations | “Sold” count no longer mislabels listed items |
+| ✅ Database Stability | Added WAL mode, schema autoload, and consistent column defaults |
+| ✅ UI Polishing | Simplified filters, added success notifications, and improved import UX |
 
-## Author
+---
 
-Erick Perales — IT Architect, Cloud Migration Specialist
+## 🔮 Coming Next
+
+Planned enhancements:
+- **Sold Orders Importer** → Automatically update Gross/Net Profit using eBay Sales Report.
+- **CSV Merge Detection** → Smart merging between Active and Sold datasets.
+- **Visual Analytics Dashboard** → Trend charts for sales, profits, and listing performance.
+- **Cloud Backup / Google Sheets Sync** → Optional sync of your data to Google Sheets.
+
+---
+
+## 📜 License
+
+MIT License — use freely, modify, and share.
+
+---
+
+## 👤 Author
+
+**Erick Perales**  
+IT Architect, Cloud Migration Specialist  
+<https://github.com/peralese>
+📧 *Private project maintained locally*

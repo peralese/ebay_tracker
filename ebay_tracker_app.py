@@ -1,11 +1,18 @@
 # ebay_tracker_app.py
-# Full drop-in replacement with robust eBay CSV import (Option A)
+# Full drop-in replacement:
+# - Correctly treats eBay "All Active Listings" export as status='listed'
+# - Safe import (manual button + MD5 de-dupe + unique index + INSERT OR IGNORE)
+# - Maintenance tools (Fix statuses, De-duplicate)
+# - KPIs use normalized status
+
 import sqlite3
 import pandas as pd
 import datetime as dt
 from datetime import date
 import streamlit as st
 from pathlib import Path
+from io import BytesIO
+import hashlib
 
 DB_PATH = Path("ebay_tracker.db")
 
@@ -42,16 +49,32 @@ CREATE TABLE IF NOT EXISTS listings (
 );
 """
 
+IMPORTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS imports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_hash TEXT UNIQUE,
+  file_name TEXT,
+  imported_at TEXT
+);
+"""
+
+UNIQUE_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS ux_listings_item_sku
+ON listings(ebay_item_id, sku);
+"""
+
+# ----------------- DB helpers -----------------
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute(SCHEMA)
+    conn.execute(IMPORTS_SCHEMA)
+    conn.execute(UNIQUE_INDEX)
     return conn
 
 def df_all(conn):
     df = pd.read_sql_query("SELECT * FROM listings ORDER BY id DESC;", conn)
     if not df.empty:
-        # Computed net_profit for display/export convenience
         df["net_profit"] = (
             df["sold_price"].fillna(0)
             + df["shipping_cost_buyer"].fillna(0)
@@ -62,8 +85,7 @@ def df_all(conn):
     return df
 
 def upsert(conn, data: dict, row_id: int | None):
-    # Ensure last_updated is always set for inserts/updates
-    data = dict(data)  # shallow copy so we don't mutate caller
+    data = dict(data)
     data["last_updated"] = dt.datetime.now().isoformat(timespec="seconds")
 
     cols = list(data.keys())
@@ -82,10 +104,11 @@ def upsert(conn, data: dict, row_id: int | None):
 def delete_rows(conn, ids):
     if not ids:
         return
-    q = "DELETE FROM listings WHERE id IN ({})".format(",".join(["?"]*len(ids)))
+    q = "DELETE FROM listings WHERE id IN ({})".format(",".join(["?"] * len(ids)))
     conn.execute(q, ids)
     conn.commit()
 
+# ----------------- Import helpers -----------------
 def to_number(series):
     return pd.to_numeric(series, errors="coerce")
 
@@ -105,73 +128,73 @@ def normalize_status(raw):
         "returned": "returned",
         "draft": "draft",
     }
-    # pick best match or return original
     return mapping.get(s, s)
+
+def _pick_ci(df: pd.DataFrame, candidates: list[str]):
+    """Pick a column from df by case-insensitive match from candidates."""
+    lower = {c.lower(): c for c in df.columns}
+    for c in candidates:
+        if c.lower() in lower:
+            return df[lower[c.lower()]]
+    return None
+
+def looks_like_active_listings(imp: pd.DataFrame) -> bool:
+    """
+    Heuristic for eBay 'All Active Listings' report:
+    - Often has 'Sold quantity' and 'Available quantity'
+    - Usually lacks a 'Status'/'Listing Status' column
+    """
+    cols = set(imp.columns)
+    has_qty_cols = ("Sold quantity" in cols or "Quantity Sold" in cols or "Qty Sold" in cols) \
+                   or ("Available quantity" in cols or "Quantity Available" in cols or "Quantity" in cols)
+    has_status = ("Status" in cols) or ("Listing Status" in cols) or ("Result" in cols)
+    return has_qty_cols and not has_status
 
 def map_ebay_export_to_schema(imp: pd.DataFrame) -> pd.DataFrame:
     """
-    Accepts common eBay Seller Hub CSV exports (Active/Sold/etc.)
+    Accepts common eBay Seller Hub CSV exports (Active Listings, Orders/Sold, etc.)
     and maps columns to our schema. Unknown columns are ignored.
+    - If this is an Active Listings export, force status='listed' for all rows.
     """
-    # Trim header whitespace
-    # Build a case-insensitive lookup
-    cols_lower = {c.lower(): c for c in imp.columns}
-
-    def pick(cands):
-        for c in cands:
-            if c.lower() in cols_lower:
-                return imp[cols_lower[c.lower()]]
-        return None
+    imp = imp.copy()
+    imp.columns = [c.strip() for c in imp.columns]
 
     colmap = {
         "ebay_item_id": ["Item number", "Item ID", "ItemID", "Item Id"],
-        "sku": ["Custom label (SKU)", "Custom label", "Custom Label (SKU)", "CustomLabel", "SKU"],
+        "sku": ["Custom label (SKU)", "Custom label", "Custom Label (SKU)", "SKU"],
         "title": ["Title"],
-        "category": ["Category", "Category Name", "Primary Category"],  # may be absent in this export
-        "status": ["Status", "Listing Status", "Result"],               # absent -> we'll default to 'listed'
+        "category": ["Category", "Category Name", "Primary Category", "eBay category 1 name"],
+        "status": ["Status", "Listing Status", "Result"],  # may not exist in Active Listings
         "list_date": ["Start date", "Start Date", "Start time", "Start Time", "Creation Date"],
         "list_price": ["Current price", "Start price", "Start Price", "Price"],
-        "bin_price": ["Auction Buy It Now price", "Buy It Now Price", "BIN Price", "Buy It Now price"],
+        "bin_price": ["Auction Buy It Now price", "Buy It Now Price", "Buy It Now price"],
         "views": ["Views", "View Count"],
         "watchers": ["Watchers"],
         "bids": ["Bids"],
         "quantity": ["Available quantity", "Quantity", "Quantity Available", "Quantity Listed"],
-        "item_url": ["Item URL", "URL", "View Item URL", "Item URL link"],  # often absent in this report
+        "sold_qty": ["Sold quantity", "Quantity Sold", "Qty Sold"],
+        "item_url": ["Item URL", "URL", "View Item URL", "Item URL link"],
         "sold_price": ["Sold Price", "Sold For", "Total price", "Total Price", "Price (total)"],
-        "sold_date": ["Sale Date", "Paid On", "Order Date", "End Date", "End date", "End time", "End Time", "End Time (GMT)"],
+        "sold_date": ["Sale Date", "Paid On", "Order Date", "End Date", "End date", "End time", "End Time"],
         "buyer_username": ["Buyer User ID", "Buyer Username", "Buyer ID", "Buyer"],
         "order_id": ["Order ID", "Sales Record Number", "Sales Record #", "Record number", "Order id"],
         "shipping_cost_buyer": ["Shipping And Handling", "Shipping charged to buyer", "Postage and packaging - paid by buyer", "Shipping paid by buyer"],
         "notes": ["Notes", "Private notes"],
+        "condition": ["Condition"],
     }
 
     data = {}
     for our, cands in colmap.items():
-        v = pick(cands)
+        v = _pick_ci(imp, cands)
         if v is not None:
             data[our] = v
 
     df = pd.DataFrame(data)
 
-
-    def pick(cands):
-        for c in cands:
-            if c in imp.columns:
-                return imp[c]
-        return None
-
-    data = {}
-    for our, cands in colmap.items():
-        col = pick(cands)
-        if col is not None:
-            data[our] = col
-
-    df = pd.DataFrame(data)
-
-    # Type cleanup and normalization
-    for c in ["list_price", "bin_price", "sold_price", "shipping_cost_buyer"]:
+    # ---- Types / normalization ----
+    for c in ["list_price", "bin_price", "sold_price", "shipping_cost_buyer", "sold_qty"]:
         if c in df.columns:
-            df[c] = to_number(df[c])
+            df[c] = to_number(df[c]).fillna(0)
 
     for c in ["views", "watchers", "bids", "quantity"]:
         if c in df.columns:
@@ -183,19 +206,27 @@ def map_ebay_export_to_schema(imp: pd.DataFrame) -> pd.DataFrame:
     if "sold_date" in df.columns:
         df["sold_date"] = pd.to_datetime(df["sold_date"], errors="coerce").dt.date.astype("string")
 
-    if "status" in df.columns:
-        df["status"] = df["status"].map(normalize_status)
+    # ---- Determine status ----
+    if looks_like_active_listings(imp):
+        # This is the Active Listings export → everything is 'listed'
+        df["status"] = "listed"
+    else:
+        # If a status column exists, normalize it
+        if "status" in df.columns:
+            df["status"] = df["status"].map(normalize_status)
+        else:
+            # Fallback heuristic for other reports:
+            # if sold markers exist, mark sold; else listed
+            sold_markers = []
+            if "sold_price" in df.columns:
+                sold_markers.append(df["sold_price"].fillna(0) > 0)
+            if "sold_date" in df.columns:
+                sold_markers.append(df["sold_date"].notna())
+            any_sold = pd.concat(sold_markers, axis=1).any(axis=1) if sold_markers else pd.Series(False, index=df.index)
+            df.loc[any_sold, "status"] = "sold"
+            df.loc[~any_sold, "status"] = "listed"
 
-    # Infer status if not provided but sold columns exist
-    if "status" not in df.columns:
-        df["status"] = None
-    if "sold_price" in df.columns:
-        df.loc[df["sold_price"].fillna(0) > 0, "status"] = "sold"
-    if "sold_date" in df.columns:
-        df.loc[df["sold_date"].notna(), "status"] = "sold"
-    df["status"] = df["status"].fillna("listed")
-
-    # Ensure our full schema columns exist (except id)
+    # Ensure all schema columns exist
     expected = [
         "sku","title","category","condition","status","list_date","list_price","bin_price",
         "sold_price","sold_date","buyer_username","order_id","shipping_cost_buyer",
@@ -207,47 +238,71 @@ def map_ebay_export_to_schema(imp: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = pd.NA
 
-    # Safe defaults to avoid null math errors later
+    # Safe numeric defaults
     for c in ["shipping_cost_seller","ebay_fees","tax_collected","cost_of_goods","relist_count"]:
         df[c] = to_number(df[c]).fillna(0)
 
     return df[expected]
 
+# ----------------- UI -----------------
 st.set_page_config(page_title="eBay Listing Tracker", layout="wide")
 st.title("eBay Listing Tracker")
 
 with get_conn() as conn:
-
     # ---------- SIDEBAR ----------
     with st.sidebar:
         st.header("Data")
 
-        # Import: our template or eBay Seller Hub CSV
+        # --- SAFE IMPORT (button + MD5 hash + unique index + INSERT OR IGNORE) ---
         uploaded = st.file_uploader("Import CSV (App template or eBay export)", type=["csv"])
+
+        def _md5_of(b: bytes) -> str:
+            h = hashlib.md5()
+            h.update(b)
+            return h.hexdigest()
+
         if uploaded is not None:
-            imp = pd.read_csv(uploaded)
-            # If CSV already matches our schema (template), keep as-is.
-            expected_cols = {c for c in pd.read_sql_query("PRAGMA table_info(listings);", conn)["name"]}
-            if set(imp.columns) & {"Title", "Custom label", "Item ID", "Listing Status"}:
-                # Looks like an eBay export -> map it
-                df_norm = map_ebay_export_to_schema(imp)
-            else:
-                # Assume it's our template; drop unknowns and keep known columns
-                keep = [c for c in imp.columns if c in expected_cols and c != "id"]
-                df_norm = imp[keep].copy()
-                # Ensure all expected columns exist
-                for col in expected_cols:
-                    if col not in df_norm.columns and col != "id":
-                        df_norm[col] = pd.NA
+            file_bytes = uploaded.getvalue()
+            file_hash = _md5_of(file_bytes)
+            st.caption(f"Selected file: {uploaded.name}")
 
-            rows = df_norm.to_dict(orient="records")
-            # Upsert (insert) each row; duplicates are not deduped at this stage
-            for row in rows:
-                row.pop("id", None)
-                upsert(conn, row, None)
-            st.success(f"Imported {len(rows)} listings.")
+            if st.button("Import this file"):
+                already = conn.execute("SELECT 1 FROM imports WHERE file_hash=?;", (file_hash,)).fetchone()
+                if already:
+                    st.info("This exact file was already imported. Skipping re-import ✅")
+                else:
+                    imp = pd.read_csv(BytesIO(file_bytes))
+                    ebay_markers = {"Title", "Custom label", "Custom label (SKU)", "Item number", "Item ID", "Listing Status"}
+                    if len(ebay_markers.intersection(set(imp.columns))) > 0:
+                        df_norm = map_ebay_export_to_schema(imp)
+                    else:
+                        # Treat as our app template; keep only known columns
+                        tbl_cols = list(pd.read_sql_query("PRAGMA table_info(listings);", conn)["name"])
+                        keep = [c for c in imp.columns if c in tbl_cols and c != "id"]
+                        df_norm = imp[keep].copy()
+                        for c in tbl_cols:
+                            if c not in df_norm.columns and c != "id":
+                                df_norm[c] = pd.NA
 
-        # Export (always available)
+                    # Ensure keys exist and are not NULL (unique index uses both)
+                    if "ebay_item_id" not in df_norm.columns:
+                        df_norm["ebay_item_id"] = pd.NA
+                    if "sku" not in df_norm.columns:
+                        df_norm["sku"] = pd.NA
+                    df_norm["sku"] = df_norm["sku"].fillna("")
+
+                    cols = [c for c in df_norm.columns if c != "id"]
+                    placeholders = ",".join(["?"] * len(cols))
+                    sql = f"INSERT OR IGNORE INTO listings ({','.join(cols)}) VALUES ({placeholders});"
+                    conn.executemany(sql, df_norm[cols].where(pd.notna(df_norm[cols]), None).values.tolist())
+                    conn.execute(
+                        "INSERT OR IGNORE INTO imports(file_hash, file_name, imported_at) VALUES (?,?,datetime('now'));",
+                        (file_hash, uploaded.name),
+                    )
+                    conn.commit()
+                    st.success(f"Imported {len(df_norm)} listings (duplicates ignored). ✅")
+
+        # Export
         exp_df = df_all(conn)
         st.download_button(
             "Export CSV",
@@ -266,7 +321,7 @@ with get_conn() as conn:
         sku_filter = st.text_input("SKU contains…")
 
     # ---------- MAIN: Left = Add/Edit, Right = Actions/Table ----------
-    col1, col2 = st.columns([1,1])
+    col1, col2 = st.columns([1, 1])
 
     # Add / Edit form
     with col1:
@@ -281,8 +336,7 @@ with get_conn() as conn:
                 st.info("No rows yet. Switch to 'Add new'.")
             else:
                 choices = all_rows.apply(
-                    lambda r: f"[{r['id']}] {r['sku'] or ''} – {r['title'] or ''}",
-                    axis=1
+                    lambda r: f"[{r['id']}] {r['sku'] or ''} – {r['title'] or ''}", axis=1
                 ).tolist()
                 pick = st.selectbox("Pick a row to edit", choices)
                 try:
@@ -292,7 +346,6 @@ with get_conn() as conn:
                     edit_id = None
                     edit_row = None
 
-        # Prefill fields in edit mode
         def pref(key, default=""):
             if edit_row is not None and key in edit_row.index:
                 return edit_row[key] if pd.notna(edit_row[key]) else default
@@ -304,10 +357,14 @@ with get_conn() as conn:
             category = st.text_input("Category", value=pref("category"))
             condition = st.text_input("Condition", value=pref("condition"))
             status = st.selectbox(
-                "Status", ["draft","listed","sold","returned","archived"],
-                index=["draft","listed","sold","returned","archived"].index(pref("status","listed")) if pref("status","listed") in ["draft","listed","sold","returned","archived"] else 1
+                "Status",
+                ["draft","listed","sold","returned","archived"],
+                index=["draft","listed","sold","returned","archived"].index(
+                    pref("status", "listed")
+                ) if pref("status", "listed") in ["draft","listed","sold","returned","archived"] else 1
             )
-            # Parse existing date if present
+
+            # Date
             existing_list_date = pref("list_date")
             try:
                 existing_ld = pd.to_datetime(existing_list_date).date() if existing_list_date else date.today()
@@ -351,7 +408,7 @@ with get_conn() as conn:
                 upsert(conn, data, edit_id if mode == "Edit existing" else None)
                 st.success("Saved.")
 
-    # Actions, KPIs, and Table
+    # Actions, KPIs, Table, Maintenance
     with col2:
         st.subheader("Quick Actions")
         df = df_all(conn)
@@ -428,17 +485,17 @@ with get_conn() as conn:
                         delete_rows(conn, sel)
                         st.success(f"Deleted {len(sel)} row(s).")
 
-            # KPIs
+            # KPIs (use normalized status)
             k1, k2, k3, k4 = st.columns(4)
             total_listed = int((df["status"] == "listed").sum())
             total_sold = int((df["status"] == "sold").sum())
-            gross_sales = float(df.loc[df["status"]=="sold", "sold_price"].fillna(0).sum())
+            gross_sales = float(df.loc[df["status"] == "sold", "sold_price"].fillna(0).sum())
             net_profit = float(
-                df.loc[df["status"]=="sold", "sold_price"].fillna(0).sum()
-                + df.loc[df["status"]=="sold", "shipping_cost_buyer"].fillna(0).sum()
-                - df.loc[df["status"]=="sold", "shipping_cost_seller"].fillna(0).sum()
-                - df.loc[df["status"]=="sold", "ebay_fees"].fillna(0).sum()
-                - df.loc[df["status"]=="sold", "cost_of_goods"].fillna(0).sum()
+                df.loc[df["status"] == "sold", "sold_price"].fillna(0).sum()
+                + df.loc[df["status"] == "sold", "shipping_cost_buyer"].fillna(0).sum()
+                - df.loc[df["status"] == "sold", "shipping_cost_seller"].fillna(0).sum()
+                - df.loc[df["status"] == "sold", "ebay_fees"].fillna(0).sum()
+                - df.loc[df["status"] == "sold", "cost_of_goods"].fillna(0).sum()
             )
             k1.metric("Active Listings", total_listed)
             k2.metric("Sold", total_sold)
@@ -446,3 +503,35 @@ with get_conn() as conn:
             k4.metric("Net Profit", f"${net_profit:,.2f}")
 
             st.dataframe(df.fillna(""), use_container_width=True)
+
+        # ---------- Maintenance ----------
+        st.subheader("Maintenance")
+        with st.expander("One-click fixes"):
+            col_a, col_b = st.columns(2)
+
+            with col_a:
+                if st.button("Fix statuses (set to 'listed' if no sold_date/price)"):
+                    conn.execute("""
+                        UPDATE listings
+                        SET status='listed', last_updated=datetime('now')
+                        WHERE (status='sold' OR status IS NULL OR status='')
+                          AND (sold_date IS NULL OR sold_date='')
+                          AND (sold_price IS NULL OR sold_price=0);
+                    """)
+                    conn.commit()
+                    st.success("Statuses corrected.")
+
+            with col_b:
+                if st.button("De-duplicate listings (keep lowest id per (item_id, sku))"):
+                    conn.execute(UNIQUE_INDEX)  # ensure index exists
+                    conn.execute("""
+                        DELETE FROM listings
+                        WHERE id NOT IN (
+                          SELECT MIN(id)
+                          FROM listings
+                          GROUP BY ebay_item_id, sku
+                        );
+                    """)
+                    conn.commit()
+                    st.success("Duplicates removed.")
+
