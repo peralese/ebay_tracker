@@ -1,169 +1,125 @@
-# 🛒 eBay Listing Tracker
+# 🛒 eBay Item Tracker --- Sell API Integration (Phase A)
 
-The **eBay Listing Tracker** is a local Streamlit-based app for managing your eBay listings database.  
-It allows you to import eBay CSV exports, track listing status, update metrics, and maintain a clean, deduplicated dataset.
+## 📦 Overview
 
----
+This update adds **Sell API read-only synchronization** to automatically
+refresh your local SQLite database with the latest data from your eBay
+account. It introduces new modules and tables for **offers** and
+**sync_runs**, and uses OAuth2 refresh tokens for secure, long-lived
+access.
 
-## 🚀 Features
+------------------------------------------------------------------------
 
-### 🔄 Import & Data Management
-- **Import eBay exports** (e.g., *All Active Listings* reports).
-- **Safe Import System**:
-  - Manual **Import** button to avoid accidental re-imports.
-  - **MD5 hash tracking** to prevent duplicate uploads.
-  - **Unique index** on `(ebay_item_id, sku)` to ensure duplicates are ignored.
-- Supports both **Active Listings** and (future) **Orders/Sold** reports.
-- Data stored locally in a lightweight **SQLite** database (`ebay_tracker.db`).
+## 🚀 Features Added
 
-### 🧩 Corrected Active Listings Handling
-- Active Listings files now correctly import as **`status = listed`**.
-- The app **no longer misclassifies** active items as sold.
-- “Sold” and “Gross/Net Sales” counters only update for listings manually marked as sold or imported from future “Orders” reports.
+-   **Sell Feed API** integration to request Active Inventory Reports.\
+-   **Sell Inventory API** integration to fetch offer and listing data
+    per SKU.\
+-   **Automatic upsert** logic prevents duplicates and updates changed
+    records.\
+-   **DB migrations** to create new tables: `offers` and `sync_runs`.\
+-   **CLI support** to run a sync manually.\
+-   **Read-only scopes** for safe access.
 
-### 📊 Dashboard & KPIs
-- **Active Listings** count.
-- **Sold Listings** count.
-- **Gross Sales** and **Net Profit** (computed from sold data).
-- Auto-calculated metrics for:
-  - Fees
-  - Shipping (buyer/seller)
-  - Cost of goods
-  - Profit margins
+------------------------------------------------------------------------
 
-### 🧮 Add / Edit Listings
-- Add or edit listing details such as:
-  - SKU, Title, Category, Condition, Status, Dates, Prices, URLs
-  - Views, Watchers, Bids, Relist count
-  - Cost of goods, eBay fees, Notes
-- All changes automatically saved to the database.
+## 🧰 New Files and Modules
 
-### ⚙️ Quick Actions
-- **Update metrics** — Add views, watchers, bids, or set fees & costs.
-- **Mark as Sold** — Convert a listing to sold, track buyer/order/shipping.
-- **Relist** — Reset status to `listed` and increment relist count.
-- **Delete Selected** — Remove listings permanently.
+  -----------------------------------------------------------------------
+  File                       Purpose
+  -------------------------- --------------------------------------------
+  `ebay_auth.py`             Handles OAuth refresh token flow and
+                             short-lived token exchange.
 
-### 🧹 Maintenance Tools
-Built-in one-click cleanup under the **Maintenance** section:
-- **Fix Statuses**: Resets incorrect “sold” statuses to `listed` for active items.
-- **De-duplicate Listings**: Keeps the lowest ID per `(ebay_item_id, sku)` pair and removes duplicates.
-- Ensures database consistency without needing external scripts.
+  `ebay_feed.py`             Creates and polls Feed API Active Inventory
+                             Report tasks.
 
----
+  `ebay_inventory.py`        Retrieves offer and listing info per SKU.
 
-## 📂 Project Structure
+  `db.py`                    Database helper for upsert and sync
+                             tracking.
 
-```
-ebay_tracker_app.py     # Streamlit app
-ebay_tracker.db         # SQLite database (auto-created)
-README.md               # This file
+  `sych.py`                  Orchestrates Feed and Inventory API calls
+                             and writes results to DB.
+
+  `sync_cli.py`              Optional CLI wrapper for `sych.run_sync()`.
+  -----------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+## ⚙️ Environment Setup
+
+### 1️⃣ Create `.env` file
+
+``` ini
+EBAY_ENV=PROD
+EBAY_APP_ID=YOUR_CLIENT_ID
+EBAY_CERT_ID=YOUR_CLIENT_SECRET
+EBAY_REFRESH_TOKEN=YOUR_REFRESH_TOKEN
 ```
 
----
+*(Your developer account must be approved to obtain these values.)*
 
-## 🧠 How to Use
+### 2️⃣ Install Dependencies
 
-1. **Run the App**
-   ```bash
-   streamlit run ebay_tracker_app.py
-   ```
+``` bash
+pip install python-dotenv requests
+```
 
-2. **Import Your eBay CSV**
-   - Click **Browse files** and select your `All Active Listings` export from eBay.
-   - Click **Import this file**.
-   - The app will import new listings (duplicates ignored).
-   - You’ll see a confirmation message:
-     > ✅ Imported 122 listings (duplicates ignored).
+### 3️⃣ Initialize Database
 
-3. **View and Filter Listings**
-   - Use sidebar filters for `Status`, `Category`, or `SKU`.
-   - Listings will appear in the table on the right.
+``` bash
+python migrate_once.py
+```
 
-4. **Add / Edit Listings**
-   - Switch between **Add new** and **Edit existing**.
-   - Fill or update listing details.
-   - Click **Save**.
+### 4️⃣ Run Sync
 
-5. **Quick Actions**
-   - **Mark as Sold** → Manually mark listings as sold.
-   - **Relist selected** → Reactivate sold or archived listings.
-   - **Update metrics / fees / costs** → Adjust views, watchers, or eBay fees.
+``` bash
+python sync_cli.py
+```
 
-6. **Maintenance**
-   - **Fix Statuses**: Correct legacy imported statuses.
-   - **De-duplicate Listings**: Remove duplicate entries if any remain.
+Output example:
 
----
+    ✅ Sync complete: {'items_seen': 122, 'offers_seen': 122, 'task_id': '...UUID...'}
 
-## 🧱 Database Schema
+### 5️⃣ Inspect Database
 
-| Field | Type | Description |
-|-------|------|-------------|
-| id | INTEGER | Primary key |
-| sku | TEXT | eBay SKU |
-| title | TEXT | Listing title |
-| category | TEXT | eBay category |
-| condition | TEXT | Item condition |
-| status | TEXT | `listed`, `sold`, `draft`, etc. |
-| list_date | TEXT | Date listed |
-| list_price | REAL | Starting price |
-| bin_price | REAL | Buy-It-Now price |
-| sold_price | REAL | Sale price |
-| sold_date | TEXT | Date sold |
-| buyer_username | TEXT | Buyer ID |
-| order_id | TEXT | eBay order number |
-| shipping_cost_buyer | REAL | Shipping charged to buyer |
-| shipping_cost_seller | REAL | Seller-paid shipping |
-| ebay_fees | REAL | eBay fees |
-| tax_collected | REAL | Tax collected |
-| cost_of_goods | REAL | Cost of goods sold |
-| views | INTEGER | Page views |
-| watchers | INTEGER | Watchers |
-| bids | INTEGER | Number of bids |
-| quantity | INTEGER | Quantity |
-| relist_count | INTEGER | Relist counter |
-| item_url | TEXT | eBay listing URL |
-| photo_urls | TEXT | Optional image URLs |
-| notes | TEXT | Notes or remarks |
-| last_updated | TEXT | Auto timestamp |
-| ebay_item_id | TEXT | eBay item number |
+``` bash
+sqlite3 ebay_tracker.db "SELECT COUNT(*) FROM offers;"
+sqlite3 ebay_tracker.db "SELECT * FROM sync_runs ORDER BY id DESC LIMIT 3;"
+```
 
----
+------------------------------------------------------------------------
 
-## 🧩 Recent Updates (2025-10-07)
+## 🧪 Smoke Test (once credentials are available)
 
-| Change | Description |
-|--------|--------------|
-| ✅ Safe Import System | Added MD5-hash detection, manual import button, and `INSERT OR IGNORE` logic |
-| ✅ Unique Index | Enforced unique `(ebay_item_id, sku)` per listing |
-| ✅ Correct Active Listings Detection | Detects “All Active Listings” exports and sets all items to `status='listed'` |
-| ✅ Maintenance UI | Added Fix Statuses and De-duplicate buttons inside the app |
-| ✅ Fixed KPI Calculations | “Sold” count no longer mislabels listed items |
-| ✅ Database Stability | Added WAL mode, schema autoload, and consistent column defaults |
-| ✅ UI Polishing | Simplified filters, added success notifications, and improved import UX |
+``` bash
+python -c "from ebay_auth import get_access_token; print(get_access_token()[:32]+'...')"
+python -c "import sych; print(sych.run_sync())"
+```
 
----
+Expected behavior: - Tokens refresh successfully.\
+- Feed API task runs and returns results.\
+- Offers and sync_runs tables are populated.
 
-## 🔮 Coming Next
+------------------------------------------------------------------------
 
-Planned enhancements:
-- **Sold Orders Importer** → Automatically update Gross/Net Profit using eBay Sales Report.
-- **CSV Merge Detection** → Smart merging between Active and Sold datasets.
-- **Visual Analytics Dashboard** → Trend charts for sales, profits, and listing performance.
-- **Cloud Backup / Google Sheets Sync** → Optional sync of your data to Google Sheets.
+## 🧭 Next Steps
 
----
+-   Wait for **eBay Developer Program approval**.\
+-   Once approved, add credentials to `.env`.\
+-   Perform first live sync (read-only).\
+-   Add Streamlit dashboard integration to visualize sync stats.
+
+------------------------------------------------------------------------
 
 ## 📜 License
 
-MIT License — use freely, modify, and share.
+MIT License. Use freely, modify, and share!
 
----
+## Author
 
-## 👤 Author
-
-**Erick Perales**  
+Erick Perales
 IT Architect, Cloud Migration Specialist  
 <https://github.com/peralese>
 📧 *Private project maintained locally*
