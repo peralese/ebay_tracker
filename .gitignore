@@ -1,62 +1,69 @@
-from pathlib import Path
-
-gitignore = """# ---- Python basics ----
+# ---- Python ----
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
 
-# Virtual environments
+# ---- Virtual Environments ----
 .venv/
 venv/
-env/
-ENV/
 
-# Packaging / build
-build/
-dist/
-*.egg-info/
+# ---- Editors/IDEs ----
+.vscode/
+.idea/
+*.code-workspace
 
-# Tests / coverage
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# ---- App-specific artifacts ----
-# Local SQLite database (keep data local, don't commit)
-ebay_tracker.db
-*.sqlite
-*.sqlite3
-*.db
-
-# Streamlit cache/config (keep secrets out of repo)
-.streamlit/secrets.toml
-.streamlit/**/secrets.toml
-.streamlit/**/credentials.toml
-
-# CSV exports/imports (you can un-ignore specific examples if needed)
-listings.csv
-eBay*.csv
-*.log
-
-# Local data dumps
-data/
-exports/
-output/
-
-# ---- Editor / OS clutter ----
+# ---- OS junk ----
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 Desktop.ini
 
-# dotenv files (API keys, tokens)
+# ---- Logs & Artifacts ----
+logs/
+*.log
+*.csv
+
+# Per-run JSON artifacts (kept under logs/; directory is ignored above)
+sync-*.json
+
+# ---- Environment & Secrets ----
 .env
 .env.*
-"""
+*.pem
+*.pfx
+*.crt
+*.key
 
-Path("/mnt/data/.gitignore").write_text(gitignore, encoding="utf-8")
-"/mnt/data/.gitignore"
+# ---- Local Data (adjust if you want to commit samples) ----
+*.db
+*.sqlite
+*.sqlite3
+data/
+.cache/
+tmp/
+*.bak
+*.tmp
+
+# ---- Test tooling ----
+.pytest_cache/
+.mypy_cache/
+
+# ---- Notebooks ----
+.ipynb_checkpoints/
+
+# Streamlit cache/config (keep secrets out of repo)
+.streamlit/secrets.toml
+.streamlit/**/secrets.toml
+.streamlit/**/credentials.toml
+
+# Local data dumps
+data/
+exports/
+output/
