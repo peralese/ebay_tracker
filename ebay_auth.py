@@ -1,9 +1,15 @@
 import os, time, base64, requests
 
 EBAY_ENV = os.getenv("EBAY_ENV", "PROD")
-OAUTH_BASE = "https://api.ebay.com/identity/v1/oauth2/token" if EBAY_ENV == "PROD" else "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
-CLIENT_ID = os.getenv("EBAY_APP_ID")
-CLIENT_SECRET = os.getenv("EBAY_CERT_ID")
+OAUTH_BASE = (
+    "https://api.ebay.com/identity/v1/oauth2/token"
+    if EBAY_ENV == "PROD"
+    else "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
+)
+
+# Prefer modern var names, fall back to legacy ones for compatibility
+CLIENT_ID = os.getenv("EBAY_CLIENT_ID") or os.getenv("EBAY_APP_ID")
+CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET") or os.getenv("EBAY_CERT_ID")
 REFRESH_TOKEN = os.getenv("EBAY_REFRESH_TOKEN")
 
 def _basic_auth():

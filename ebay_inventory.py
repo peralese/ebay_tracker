@@ -68,21 +68,7 @@ def _select_columns(conn: sqlite3.Connection, name: str):
     ]
     chosen = [c for c in preferred if c in cols] or cols
     return chosen
-
-
-def _select_columns(conn: sqlite3.Connection, table: str):
-    cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
-    # Prefer these if present; ELSE select all columns
-    preferred = [
-        "id","sku","title","status","list_price","sold_price","ebay_item_id","itemId","item_id",
-        # timestamps used by --since
-        "updated_at","modified","last_modified","lastUpdate","last_updated","mtime",
-        "modified_at","date_modified","changed_at","created","created_at","listed_at",
-        # your schema extras that feed updated_at in the view
-        "sold_date","list_date",
-    ]
-    chosen = [c for c in preferred if c in cols] or cols
-    return chosen
+    
 
 
 def get_local_items():
