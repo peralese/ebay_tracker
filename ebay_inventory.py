@@ -15,7 +15,7 @@ def get_offers_for_sku(sku):
 # Looks for local items in either a CSV or SQLite; remote ops are no-ops for now.
 
 from pathlib import Path
-import os, csv, sqlite3
+import os, csv, sqlite3, io, re
 
 # Optional overrides
 _EBT_LOCAL_CSV       = os.getenv("EBT_LOCAL_CSV")              # e.g. data\items.csv
@@ -109,10 +109,108 @@ def get_local_items():
 
 def get_remote_items():
     """
-    No real remote read until API creds are ready.
-    Return empty -> upsert pass treats everything as 'skipped'.
+    Return iterable[dict] for current eBay items.
+    Offline-safe: if auth is disabled or creds are missing, return [].
+    When online, uses Feed API ACTIVE_INVENTORY_REPORT for broad coverage.
     """
-    return []
+    # Offline / auth-disabled short-circuit
+    if os.getenv("EBT_DISABLE_AUTH"):
+        return []
+
+    # Basic cred check (mirror sync.py tolerance for placeholders)
+    cid = os.getenv("EBAY_CLIENT_ID") or os.getenv("EBAY_APP_ID")
+    csec = os.getenv("EBAY_CLIENT_SECRET") or os.getenv("EBAY_CERT_ID")
+    rtok = os.getenv("EBAY_REFRESH_TOKEN")
+    def _looks_real(v: str | None) -> bool:
+        if not v:
+            return False
+        up = v.strip().upper()
+        return not (up.startswith("YOUR_") or up.startswith("PLACEHOLDER") or up.startswith("XXX"))
+    if not (_looks_real(cid) and _looks_real(csec) and _looks_real(rtok)):
+        return []
+
+    # Defer import to avoid pulling requests/auth when offline
+    import ebay_feed
+
+    # Request + wait + download
+    task_id = ebay_feed.request_active_inventory_report()
+    meta = ebay_feed.wait_for_task(task_id)
+    # Result URL key can vary; handle common cases
+    url = (
+        (meta.get("resultFileUrl") or
+         (meta.get("resultFileUrls") or [None])[0])
+    )
+    if not url:
+        raise RuntimeError("Feed task missing result file URL")
+    text = ebay_feed.download_report(url)
+
+    # Parse CSV/TSV into dicts with stable keys
+    def _pick(row: dict, candidates: list[str]):
+        keys = {k.lower(): k for k in row.keys()}
+        for c in candidates:
+            if c.lower() in keys:
+                return row.get(keys[c.lower()])
+        return None
+
+    def _to_int(v):
+        if v is None:
+            return None
+        s = str(v).replace(",", "").strip()
+        return int(s) if re.fullmatch(r"[-+]?\d+", s or "") else None
+
+    def _to_float(v):
+        if v is None:
+            return None
+        s = str(v).replace(",", "").strip()
+        s = re.sub(r"[^0-9.+-]", "", s)
+        try:
+            return float(s)
+        except Exception:
+            return None
+
+    sample = text[: min(len(text), 8192)]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t;")
+    except Exception:
+        class _D(csv.Dialect):
+            delimiter = ","; quotechar = '"'; escapechar = None; doublequote = True; skipinitialspace = False; lineterminator = "\n"; quoting = csv.QUOTE_MINIMAL
+        dialect = _D
+
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    items: list[dict] = []
+    for r in reader:
+        r = { (k or "").strip(): (v if v != "" else None) for k, v in r.items() }
+        sku = _pick(r, ["SKU","Custom label","Custom Label","Sku","sku"])
+        item_id = _pick(r, ["Item ID","ItemId","item_id","ebay_item_id"]) or None
+        title = _pick(r, ["Title","Item title","title"]) or None
+        status = _pick(r, ["Status","Listing Status","Result"]) or None
+        price = _pick(r, ["Price","Current price","BIN price","Buy It Now price"]) or None
+        sold_q = _pick(r, ["Sold quantity","Quantity Sold","Qty Sold"]) or None
+        avail_q = _pick(r, ["Available quantity","Quantity Available","Quantity"]) or None
+
+        obj = {}
+        if item_id not in (None, ""):
+            obj["id"] = str(item_id)
+            obj["ebay_item_id"] = str(item_id)
+        elif sku not in (None, ""):
+            obj["id"] = str(sku)
+        if sku not in (None, ""):
+            obj["sku"] = str(sku)
+        if title is not None:
+            obj["title"] = title
+        if status is not None:
+            obj["status"] = status
+        if price is not None:
+            obj["list_price"] = _to_float(price)
+        if sold_q is not None:
+            obj["sold_quantity"] = _to_int(sold_q)
+        if avail_q is not None:
+            obj["available_quantity"] = _to_int(avail_q)
+
+        if obj:
+            items.append(obj)
+
+    return items
 
 def upsert_remote_item(local_item: dict, remote_item: dict | None = None):
     """

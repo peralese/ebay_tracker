@@ -308,15 +308,50 @@ def run(args) -> SyncSummary:
             logging.info("Auth skipped (offline mode; creds not configured)")
 
     # Fetch local/remote
-    ok, local = _call_zero_arg(_GET_LOCAL)
-    if not ok or not _is_iterable_of_dicts(local):
+    ok, local_val = _call_zero_arg(_GET_LOCAL)
+    if not ok:
+        _banner("Failed to load local items")
+        summary.record("__local__", "errors", reason="local-load", error=str(local_val))
+        summary.finish(t0); return summary
+    try:
+        local = list(local_val)
+    except Exception:
+        _banner("Local items is not iterable")
+        print(f"Function: {_FN_LOCAL}   Type: {type(local_val).__name__}")
+        summary.record("__local__", "errors", reason="local-load", error="invalid-local-iterable")
+        summary.finish(t0); return summary
+    if not all(isinstance(v, dict) for v in local):
+        _banner("Local items must be a list of dicts")
+        print(f"Function: {_FN_LOCAL}   Type: list[{type(local[0]).__name__}]" if local else "Function produced empty list")
+        summary.record("__local__", "errors", reason="local-load", error="invalid-local-iterable")
+        summary.finish(t0); return summary
+    if False:
         _banner("Local items function didn’t return iterable[dict]")
         print(f"Function: {_FN_LOCAL}   Type: {type(local).__name__}")
         summary.record("__local__", "errors", reason="local-load", error="invalid-local-iterable")
         summary.finish(t0); return summary
 
-    ok, remote = _call_zero_arg(_GET_REMOTE)
-    if not ok or not _is_iterable_of_dicts(remote):
+    if dry_run:
+        remote = []
+    else:
+        ok, remote_val = _call_zero_arg(_GET_REMOTE)
+        if not ok:
+            _banner("Failed to load remote items")
+            summary.record("__remote__", "errors", reason="remote-load", error=str(remote_val))
+            summary.finish(t0); return summary
+        try:
+            remote = list(remote_val)
+        except Exception:
+            _banner("Remote items is not iterable")
+            print(f"Function: {_FN_REMOTE}   Type: {type(remote_val).__name__}")
+            summary.record("__remote__", "errors", reason="remote-load", error="invalid-remote-iterable")
+            summary.finish(t0); return summary
+        if not all(isinstance(v, dict) for v in remote):
+            _banner("Remote items must be a list of dicts")
+            print(f"Function: {_FN_REMOTE}   Type: list[{type(remote[0]).__name__}]" if remote else "Function produced empty list")
+            summary.record("__remote__", "errors", reason="remote-load", error="invalid-remote-iterable")
+            summary.finish(t0); return summary
+    if False:
         _banner("Remote items function didn’t return iterable[dict]")
         print(f"Function: {_FN_REMOTE}   Type: {type(remote).__name__}")
         # remote can be empty in offline; only error if completely invalid
@@ -327,7 +362,22 @@ def run(args) -> SyncSummary:
     # --since filtering (local side)
     if since_dt:
         before = len(local)
-        local = [it for it in local if (_item_ts(it) and _item_ts(it) >= since_dt)]
+        # normalize comparison to UTC-aware datetimes to avoid naive/aware errors
+        def _to_utc_aware(dt):
+            if dt is None:
+                return None
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+        since_cut = _to_utc_aware(since_dt)
+        filtered = []
+        for it in local:
+            ts = _item_ts(it)
+            if not ts:
+                continue
+            ts_cmp = _to_utc_aware(ts)
+            if ts_cmp >= since_cut:
+                filtered.append(it)
+        local = filtered
         logging.info("Filtered local items by --since %s: %d -> %d", args.since, before, len(local))
 
     # Index by ID
@@ -394,7 +444,7 @@ def run(args) -> SyncSummary:
 
 def main():
     parser = argparse.ArgumentParser(description="eBay Tracker sync runner")
-    parser.add_argument("--dry-run", action="store_true", help="Do not auth, upsert, or delete; simulate actions")
+    parser.add_argument("--dry-run", action="store_true", help="Do not auth, fetch remote, upsert, or delete; simulate actions")
     parser.add_argument("--summary-csv", type=str, help="Write a CSV summary to this path")
     parser.add_argument("--since", type=str, help="Only process local items changed on/after YYYY-MM-DD")
     parser.add_argument("-v","--verbose", action="count", default=0, help="Increase log verbosity (-v, -vv)")
