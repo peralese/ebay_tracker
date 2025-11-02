@@ -1,4 +1,4 @@
-import time, requests
+﻿import time, requests
 from ebay_auth import get_access_token
 
 BASE = "https://api.ebay.com/sell/feed/v1"

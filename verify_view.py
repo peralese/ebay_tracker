@@ -1,4 +1,4 @@
-import os, sqlite3
+﻿import os, sqlite3
 db  = os.getenv("EBT_SQLITE_PATH","ebay_tracker.db")
 tbl = os.getenv("EBT_SQLITE_TABLE","listings_for_sync")
 con = sqlite3.connect(db); con.row_factory = sqlite3.Row

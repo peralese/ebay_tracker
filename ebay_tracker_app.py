@@ -1,4 +1,4 @@
-# ebay_tracker_app.py
+﻿# ebay_tracker_app.py
 # Full drop-in replacement:
 # - Correctly treats eBay "All Active Listings" export as status='listed'
 # - Safe import (manual button + MD5 de-dupe + unique index + INSERT OR IGNORE)
@@ -317,8 +317,8 @@ with get_conn() as conn:
             "Status", ["draft","listed","sold","returned","archived"],
             default=["listed","draft"]
         )
-        cat_filter = st.text_input("Category contains…")
-        sku_filter = st.text_input("SKU contains…")
+        cat_filter = st.text_input("Category contains...")
+        sku_filter = st.text_input("SKU contains...")
 
     # ---------- MAIN: Left = Add/Edit, Right = Actions/Table ----------
     col1, col2 = st.columns([1, 1])
@@ -336,7 +336,7 @@ with get_conn() as conn:
                 st.info("No rows yet. Switch to 'Add new'.")
             else:
                 choices = all_rows.apply(
-                    lambda r: f"[{r['id']}] {r['sku'] or ''} – {r['title'] or ''}", axis=1
+                    lambda r: f"[{r['id']}] {r['sku'] or ''} - {r['title'] or ''}", axis=1
                 ).tolist()
                 pick = st.selectbox("Pick a row to edit", choices)
                 try:

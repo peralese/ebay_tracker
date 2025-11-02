@@ -1,4 +1,4 @@
-# eBay Tracker
+﻿# eBay Tracker
 
 Track your eBay listings locally and (when ready) sync to eBay. The runner prints a clean end-of-run summary and writes portable logs/artifacts for CI and troubleshooting.
 
@@ -85,20 +85,22 @@ The app creates tables on first run and supports CSV imports from eBay Seller Hu
    EBAY_CLIENT_SECRET=...
    EBAY_REFRESH_TOKEN=...
    ```
-2. Remove `EBT_DISABLE_AUTH` and implement in `ebay_inventory.py`:
-   - `get_remote_items()` — fetch current eBay items (keyed by `sku` or `id`)
-   - `upsert_remote_item(local_item, remote_item)` — return `"added" | "updated" | "skipped"`
-   - (Optional) `delete_remote_item()` after you're confident
-
+2. Remove `EBT_DISABLE_AUTH` to enable online mode. A default `get_remote_items()` implementation reads active listings via the Feed API when auth is configured. For writes, implement:
+   - `upsert_remote_item(local_item, remote_item)` - return `"added" | "updated" | "skipped"`
+   - (Optional) `delete_remote_item(remote_item)` after you're confident
 Artifacts and summaries work the same in both offline and online modes.
 
-Note: A default `get_remote_items()` implementation is included that reads active listings via the Feed API and maps common columns. It only runs when auth is enabled (i.e., when `EBT_DISABLE_AUTH` is not set and `.env` has valid credentials). You still need to implement write behavior (`upsert_remote_item`, and optionally `delete_remote_item`).
 
 ## Troubleshooting
-- `--since` returns 0 items — ensure your adapter returns a timestamp column (`updated_at`, `sold_date`, `list_date`, etc.). Using the view above is the fastest fix.
-- Still using CSV accidentally — unset `EBT_LOCAL_CSV` so SQLite is used.
-- Deletes happening in tests — set `EBT_DISABLE_DELETE=1`.
+- `--since` returns 0 items - ensure your adapter returns a timestamp column (`updated_at`, `sold_date`, `list_date`, etc.). Using the view above is the fastest fix.
+- Still using CSV accidentally - unset `EBT_LOCAL_CSV` so SQLite is used.
+- Deletes happening in tests - set `EBT_DISABLE_DELETE=1`.
+- Remote items empty during `--dry-run` - expected: dry-run skips remote fetch and all network calls.
 
+## Testing
+- Install dev deps: `pip install -r requirements-dev.txt`
+- Run quick smoke test: `python tests\smoke_sync.py`
+- Run pytest suite: `pytest -q`
 ## Changelog
 **2025-11-02**  
 - `--dry-run` skips remote fetch (no network calls).  
@@ -128,4 +130,12 @@ IT Architect, Cloud Migration Specialist
 <https://github.com/peralese>
 
 *Private project maintained locally*
+
+
+
+
+
+
+
+
 

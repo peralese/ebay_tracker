@@ -1,4 +1,4 @@
-# db.py
+﻿# db.py
 import sqlite3, json, datetime as dt
 from pathlib import Path
 

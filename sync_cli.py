@@ -1,4 +1,4 @@
-from sync import run_sync as _run_sync
+﻿from sync import run_sync as _run_sync
 
 if __name__ == "__main__":
     result = _run_sync()

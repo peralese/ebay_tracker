@@ -1,4 +1,4 @@
-import requests
+﻿import requests
 from ebay_auth import get_access_token
 
 BASE = "https://api.ebay.com/sell/inventory/v1"
@@ -214,7 +214,7 @@ def get_remote_items():
 
 def upsert_remote_item(local_item: dict, remote_item: dict | None = None):
     """
-    Placeholder: don't call eBay yet—just signal 'skipped'.
+    Placeholder: don't call eBay yet - just signal 'skipped'.
     When APIs are ready, implement add/update and return 'added'|'updated'|'skipped'.
     """
     return "skipped"
@@ -222,4 +222,5 @@ def upsert_remote_item(local_item: dict, remote_item: dict | None = None):
 def delete_remote_item(remote_item: dict):
     """Placeholder: never delete on eBay right now."""
     return "skipped"
+
 

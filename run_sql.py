@@ -1,4 +1,4 @@
-import sqlite3, os
+﻿import sqlite3, os
 db = os.getenv("EBT_SQLITE_PATH", "ebay_tracker.db")
 con = sqlite3.connect(db)
 con.executescript("""

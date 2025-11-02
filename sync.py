@@ -1,5 +1,5 @@
-"""
-sync.py — eBay Tracker sync runner
+﻿"""
+sync.py - eBay Tracker sync runner
 
 Adds CLI flags:
   --dry-run              : simulate (no auth, no writes, no deletes)
@@ -60,7 +60,7 @@ def _banner(txt):
 try:
     import ebay_inventory as _inv
 except Exception:
-    print("❌ Could not import ebay_inventory.py. Is it in this folder?", file=sys.stderr)
+    print("Could not import ebay_inventory.py. Is it in this folder?", file=sys.stderr)
     raise
 
 # ---------------- Helpers ----------------
@@ -142,7 +142,7 @@ _FN_DELETE = _discover("delete")  # optional
 missing = [("EBT_GET_LOCAL_FN", _FN_LOCAL), ("EBT_GET_REMOTE_FN", _FN_REMOTE), ("EBT_UPSERT_FN", _FN_UPSERT)]
 def _print_binding_help_and_exit():
     _banner("Missing required inventory bindings")
-    print("I couldn’t match your function names automatically.")
+    print("I couldn't match your function names automatically.")
     print("\nFunctions found in ebay_inventory:")
     funcs = [n for n in dir(_inv) if callable(getattr(_inv, n)) and not n.startswith("_")]
     for n in sorted(funcs):
@@ -325,9 +325,7 @@ def run(args) -> SyncSummary:
         print(f"Function: {_FN_LOCAL}   Type: list[{type(local[0]).__name__}]" if local else "Function produced empty list")
         summary.record("__local__", "errors", reason="local-load", error="invalid-local-iterable")
         summary.finish(t0); return summary
-    if False:
-        _banner("Local items function didn’t return iterable[dict]")
-        print(f"Function: {_FN_LOCAL}   Type: {type(local).__name__}")
+    
         summary.record("__local__", "errors", reason="local-load", error="invalid-local-iterable")
         summary.finish(t0); return summary
 
@@ -351,9 +349,7 @@ def run(args) -> SyncSummary:
             print(f"Function: {_FN_REMOTE}   Type: list[{type(remote[0]).__name__}]" if remote else "Function produced empty list")
             summary.record("__remote__", "errors", reason="remote-load", error="invalid-remote-iterable")
             summary.finish(t0); return summary
-    if False:
-        _banner("Remote items function didn’t return iterable[dict]")
-        print(f"Function: {_FN_REMOTE}   Type: {type(remote).__name__}")
+    
         # remote can be empty in offline; only error if completely invalid
         if remote is None:
             summary.record("__remote__", "errors", reason="remote-load", error="invalid-remote-iterable")
@@ -452,12 +448,12 @@ def main():
 
     configure_logging(args.verbose)
 
-    _banner("eBay Sync — Running")
-    print(f"Adapters — local:{_FN_LOCAL} | remote:{_FN_REMOTE} | upsert:{_FN_UPSERT} | delete:{_FN_DELETE or 'N/A'}")
+    _banner("eBay Sync - Running")
+    print(f"Adapters - local:{_FN_LOCAL} | remote:{_FN_REMOTE} | upsert:{_FN_UPSERT} | delete:{_FN_DELETE or 'N/A'}")
     if args.dry_run:
-        print("Mode     — DRY RUN (no auth, no writes, no deletes)")
+        print("Mode     - DRY RUN (no auth, no writes, no deletes)")
     if args.since:
-        print(f"Filter   — since {args.since} (local items only)")
+        print(f"Filter   - since {args.since} (local items only)")
 
     summary = run(args)
 
@@ -486,4 +482,5 @@ def run_sync():
 
 if __name__ == "__main__":
     main()
+
 

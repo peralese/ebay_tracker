@@ -1,4 +1,4 @@
-"""
+﻿"""
 Smoke test for sync.py
 
 Creates a tiny CSV as the local source, forces dry-run with auth/deletes disabled,
