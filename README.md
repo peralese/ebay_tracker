@@ -14,6 +14,7 @@ pip install -r requirements.txt
 - Timezone-aware UTC timestamps
 - Offline mode (skip OAuth with `EBT_DISABLE_AUTH=1`)
 - Safe deletes off during testing (`EBT_DISABLE_DELETE=1`)
+- Dry-run performs no network calls (skips remote fetch)
 - CLI flags: `--dry-run`, `--since`, `--summary-csv`, `--verbose`
 
 ## Quick start (offline)
@@ -25,7 +26,7 @@ python sync.py --dry-run -v
 ```
 
 ### Flags
-- `--dry-run` - simulate (no auth, no writes, no deletes)
+- `--dry-run` - simulate (no auth, no remote fetch, no writes, no deletes)
 - `--since YYYY-MM-DD` - only process local items with a timestamp on/after date
 - `--summary-csv <path>` - write a one-row CSV rollup (counts + duration)
 - `-v | -vv` - increase log verbosity in `logs/debug.log`
@@ -91,12 +92,19 @@ The app creates tables on first run and supports CSV imports from eBay Seller Hu
 
 Artifacts and summaries work the same in both offline and online modes.
 
+Note: A default `get_remote_items()` implementation is included that reads active listings via the Feed API and maps common columns. It only runs when auth is enabled (i.e., when `EBT_DISABLE_AUTH` is not set and `.env` has valid credentials). You still need to implement write behavior (`upsert_remote_item`, and optionally `delete_remote_item`).
+
 ## Troubleshooting
 - `--since` returns 0 items — ensure your adapter returns a timestamp column (`updated_at`, `sold_date`, `list_date`, etc.). Using the view above is the fastest fix.
 - Still using CSV accidentally — unset `EBT_LOCAL_CSV` so SQLite is used.
 - Deletes happening in tests — set `EBT_DISABLE_DELETE=1`.
 
 ## Changelog
+**2025-11-02**  
+- `--dry-run` skips remote fetch (no network calls).  
+- `--since` filter is UTC-aware and parses each item once.  
+- Added `.env.example` and `requirements-dev.txt`.  
+- Added gated remote read via Feed API (only when auth enabled).
 **2025-10-13**  
 - Wire `--since` to SQLite via `listings_for_sync` view example.  
 - Confirmed flags: `--dry-run`, `--since`, `--summary-csv`, `--verbose`.
