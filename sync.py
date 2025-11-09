@@ -210,7 +210,7 @@ class SyncSummary:
         }
 
 def _key(obj):
-    for k in ("id","sku","itemId","item_id"):
+    for k in ("ebay_item_id","id","sku","itemId","item_id"):
         v = obj.get(k)
         if v not in (None, ""):
             return str(v)
@@ -325,9 +325,6 @@ def run(args) -> SyncSummary:
         print(f"Function: {_FN_LOCAL}   Type: list[{type(local[0]).__name__}]" if local else "Function produced empty list")
         summary.record("__local__", "errors", reason="local-load", error="invalid-local-iterable")
         summary.finish(t0); return summary
-    
-        summary.record("__local__", "errors", reason="local-load", error="invalid-local-iterable")
-        summary.finish(t0); return summary
 
     if dry_run:
         remote = []
@@ -349,11 +346,6 @@ def run(args) -> SyncSummary:
             print(f"Function: {_FN_REMOTE}   Type: list[{type(remote[0]).__name__}]" if remote else "Function produced empty list")
             summary.record("__remote__", "errors", reason="remote-load", error="invalid-remote-iterable")
             summary.finish(t0); return summary
-    
-        # remote can be empty in offline; only error if completely invalid
-        if remote is None:
-            summary.record("__remote__", "errors", reason="remote-load", error="invalid-remote-iterable")
-        summary.finish(t0); return summary
 
     # --since filtering (local side)
     if since_dt:

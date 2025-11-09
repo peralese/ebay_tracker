@@ -26,7 +26,7 @@ _EBT_SQLITE_SKU_COL  = os.getenv("EBT_SQLITE_SKU_COLUMN", "sku")
 
 def _normalize_id(row: dict, idx_fallback: int | None = None):
     # sync.py keys by 'id' or 'sku'; ensure one exists
-    rid = row.get("id") or row.get("item_id") or row.get("itemId")
+    rid = row.get("id") or row.get("ebay_item_id") or row.get("item_id") or row.get("itemId")
     sku = row.get("sku")
     if rid not in (None, "", "None"):
         row["id"] = str(rid)

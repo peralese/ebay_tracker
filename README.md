@@ -78,6 +78,46 @@ streamlit run ebay_tracker_app.py
 ```
 The app creates tables on first run and supports CSV imports from eBay Seller Hub.
 
+## Convenience Scripts (Profiles)
+Use PowerShell helpers to set env automatically and run with the right profile.
+
+```powershell
+# Run sync in common modes
+scripts\run-sync.ps1 -Profile offline -Verbose -DryRun
+scripts\run-sync.ps1 -Profile csv -CsvPath .\tests\_tmp_smoke.csv -DryRun -Verbose
+scripts\run-sync.ps1 -Profile sqlite -Since 2025-10-01 -DryRun
+# If you have credentials in .env and want to fetch remote feed (no writes):
+scripts\run-sync.ps1 -Profile online -Verbose -DryRun:$false
+
+# Launch the UI with a profile
+scripts\run-ui.ps1 -Profile sqlite
+scripts\run-ui.ps1 -Profile csv -CsvPath .\path\to\file.csv
+```
+
+Profiles set these env vars for the current process:
+- `offline`: `EBT_DISABLE_AUTH=1`, `EBT_DISABLE_DELETE=1`, clears `EBT_LOCAL_CSV`
+- `csv`: sets `EBT_LOCAL_CSV=<CsvPath>`, `EBT_DISABLE_AUTH=1`, `EBT_DISABLE_DELETE=1`
+- `sqlite`: clears `EBT_LOCAL_CSV`; if unset, sets `EBT_SQLITE_TABLE=listings_for_sync`; `EBT_DISABLE_AUTH=1`, `EBT_DISABLE_DELETE=1`
+- `online`: clears `EBT_DISABLE_AUTH` (auth enabled); leaves `EBT_DISABLE_DELETE=1` unless you override; clears `EBT_LOCAL_CSV`
+
+## Seed From CSV (CLI)
+Import an eBay export into the SQLite DB without opening the UI.
+
+```powershell
+# Basic import
+python seed_from_csv.py --csv .\path\to\ebay_export.csv
+
+# Dry-run (parse + report, no writes)
+python seed_from_csv.py --csv .\path\to\ebay_export.csv --dry-run
+
+# Specify DB path/table and force re-import of the same file hash
+python seed_from_csv.py --csv .\file.csv --db ebay_tracker.db --table listings --force
+```
+
+The importer normalizes common Seller Hub columns, sets `status` for Active Listings, and
+inserts rows with `INSERT OR IGNORE` under a unique `(ebay_item_id, sku)` index. It also
+records the file hash in `imports` to avoid re-importing identical files.
+
 ## Going online (later)
 1. Copy `.env.example` to `.env` and fill values:
    ```env
