@@ -14,6 +14,8 @@ from pathlib import Path
 from io import BytesIO
 import hashlib
 
+from shared_db import connect as shared_connect, get_item_by_id, update_inventory_item
+
 DB_PATH = Path("ebay_tracker.db")
 
 SCHEMA = """
@@ -45,7 +47,8 @@ CREATE TABLE IF NOT EXISTS listings (
   photo_urls TEXT,
   notes TEXT,
   last_updated TEXT,
-  ebay_item_id TEXT
+  ebay_item_id TEXT,
+  shared_item_id TEXT
 );
 """
 
@@ -70,6 +73,11 @@ def get_conn():
     conn.execute(SCHEMA)
     conn.execute(IMPORTS_SCHEMA)
     conn.execute(UNIQUE_INDEX)
+    # Add shared_item_id column if missing
+    try:
+        conn.execute("ALTER TABLE listings ADD COLUMN shared_item_id TEXT;")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     return conn
 
 def df_all(conn):
@@ -101,12 +109,20 @@ def upsert(conn, data: dict, row_id: int | None):
         conn.execute(sql, vals + [row_id])
     conn.commit()
 
-def delete_rows(conn, ids):
-    if not ids:
-        return
-    q = "DELETE FROM listings WHERE id IN ({})".format(",".join(["?"] * len(ids)))
-    conn.execute(q, ids)
-    conn.commit()
+def find_shared_item_id(sku=None, ebay_item_id=None):
+    """Find matching item_id from shared inventory. Returns item_id if exactly one match, else None."""
+    with shared_connect() as conn:
+        if sku:
+            cur = conn.execute("SELECT item_id FROM inventory WHERE sku = ? AND listing_status = 'purchased'", (sku,))
+            results = cur.fetchall()
+            if len(results) == 1:
+                return results[0][0]
+        if ebay_item_id:
+            cur = conn.execute("SELECT item_id FROM inventory WHERE ebay_item_id = ? AND listing_status = 'purchased'", (ebay_item_id,))
+            results = cur.fetchall()
+            if len(results) == 1:
+                return results[0][0]
+    return None
 
 # ----------------- Import helpers -----------------
 def to_number(series):
@@ -405,6 +421,25 @@ with get_conn() as conn:
                     cost_of_goods=float(cost_of_goods or 0.0),
                     notes=notes or None
                 )
+                # Try to link to shared inventory
+                shared_id = find_shared_item_id(sku=data.get('sku'), ebay_item_id=data.get('ebay_item_id'))
+                if shared_id:
+                    data['shared_item_id'] = shared_id
+                    st.info(f"Linked to shared inventory: {shared_id}")
+                    # Update shared inventory with sale data
+                    shared_update = {
+                        'listing_status': 'listed' if data['status'] in ['listed', 'sold'] else 'ready_to_list',
+                        'list_date': data.get('list_date'),
+                        'list_price': data.get('list_price'),
+                        'sold_price': data.get('sold_price'),
+                        'sold_date': data.get('sold_date'),
+                        'shipping_cost': data.get('shipping_cost_seller', 0.0),
+                        'marketplace_fees': data.get('ebay_fees', 0.0),
+                        'ebay_item_id': data.get('ebay_item_id'),
+                    }
+                    update_inventory_item(shared_id, shared_update)
+                else:
+                    st.warning("No confident match in shared inventory. Manual linking may be needed.")
                 upsert(conn, data, edit_id if mode == "Edit existing" else None)
                 st.success("Saved.")
 

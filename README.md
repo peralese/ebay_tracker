@@ -137,6 +137,18 @@ Artifacts and summaries work the same in both offline and online modes.
 - Deletes happening in tests - set `EBT_DISABLE_DELETE=1`.
 - Remote items empty during `--dry-run` - expected: dry-run skips remote fetch and all network calls.
 
+## Shared Inventory Integration
+
+This app is part of a larger inventory workflow that includes `auction_tracker` for purchase tracking. A shared SQLite database (`shared_inventory.db`) in `/home/peralese/Projects/` serves as the central lifecycle record for items from purchase to sale.
+
+- **DB Path**: Defaults to `/home/peralese/Projects/shared_inventory.db`; override with `SHARED_INVENTORY_DB` env var.
+- **Schema**: See `docs/inventory_integration_plan.md` for details. Includes CHECK constraints for status and automatic timestamps.
+- **Helpers**: Use `shared_db.py` for DB operations (connect, insert, update, query). Handles calculations and deduplication.
+- **Deduplication**: Based on deterministic `item_id` (stable across reprocessing) and `source_hash` for file-level checks.
+- **Linkage**: Listings table has `shared_item_id` linking to shared inventory. Matching on SKU or eBay Item ID when saving.
+- **Updates**: When linked, shared inventory is updated with sale data (status, prices, fees, net_profit).
+- **Current Status**: Phase 3 complete (incremental linkage added). Future phases will enhance reporting.
+
 ## Testing
 - Install dev deps: `pip install -r requirements-dev.txt`
 - Run quick smoke test: `python tests\smoke_sync.py`
