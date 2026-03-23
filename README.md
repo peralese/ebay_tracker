@@ -147,7 +147,54 @@ This app is part of a larger inventory workflow that includes `auction_tracker` 
 - **Deduplication**: Based on deterministic `item_id` (stable across reprocessing) and `source_hash` for file-level checks.
 - **Linkage**: Listings table has `shared_item_id` linking to shared inventory. Matching on SKU or eBay Item ID when saving.
 - **Updates**: When linked, shared inventory is updated with sale data (status, prices, fees, net_profit).
-- **Current Status**: Phase 3 complete (incremental linkage added). Future phases will enhance reporting.
+- **Reconciliation**: The Streamlit app now includes a read-only reconciliation section for validating integration state before manual linking.
+- **Current Status**: Phase 3.25 complete (incremental linkage plus observability).
+
+### Reconciliation View
+
+Open the Streamlit app and scroll to the `Reconciliation` section. It compares `ebay_tracker.db` against `shared_inventory.db` without modifying either database.
+
+The view surfaces:
+- `Unlinked Listings`: rows in `listings` with no `shared_item_id`.
+- `Linked Mismatches`: linked rows where mapped status or key sale fields differ between `listings` and shared `inventory`.
+- `Shared Purchased/RTL Unlinked`: shared inventory rows still in `purchased` or `ready_to_list` with no linked listing.
+- `Matching Opportunities`: read-only candidate scans for unlinked listings using the current exact-match signals on purchased shared inventory.
+
+Mismatch detection currently compares:
+- `status` in `listings` mapped to expected shared `listing_status` (`draft -> ready_to_list`, `listed -> listed`, `sold -> sold`, `returned/archived -> closed`)
+- `list_price`
+- `sold_price`
+- `sold_date`
+- `ebay_item_id`
+
+Data sources compared:
+- `ebay_tracker.db` table: `listings`
+- `shared_inventory.db` table: `inventory`
+
+Notes:
+- The reconciliation logic is read-only and does not change current linking behavior.
+- Matching opportunities intentionally mirror the current write-path signals and only scan shared rows in `purchased` status.
+
+### Manual Linking
+
+Use the `Manual link one listing` expander inside the `Reconciliation` section for unresolved listings. The workflow is one listing at a time and requires explicit confirmation before anything is written.
+
+User flow:
+- Select one unlinked listing from the reconciliation section.
+- Review suggested shared inventory candidates with comparison fields: `title`, `purchase_date`, `lot_number`, `total_purchase_cost`, `sku`, and `ebay_item_id`.
+- Optionally show additional eligible shared inventory rows when no suggestion is obvious.
+- Choose exactly one shared inventory record.
+- Check the confirmation box and click `Confirm manual link`.
+
+What gets updated on confirmation:
+- `listings.shared_item_id` is assigned for the selected listing.
+- If `Sync current listing sale/list data to shared inventory after linking` is enabled, the shared record is updated with the current listing-side fields using the same field mapping used by the app when it auto-links on save. This includes mapped `listing_status`, `list_date`, `list_price`, `sold_price`, `sold_date`, `shipping_cost`, `marketplace_fees`, `ebay_item_id`, and `sku`.
+
+Safety rules:
+- Manual linking is single-record only.
+- The selected shared record must exist and must not already be linked to another listing.
+- The selected shared record must be in `purchased` or `ready_to_list` state.
+- Canceling the flow does not write any changes.
 
 ## Testing
 - Install dev deps: `pip install -r requirements-dev.txt`

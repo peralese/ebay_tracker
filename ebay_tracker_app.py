@@ -15,6 +15,8 @@ from io import BytesIO
 import hashlib
 
 from shared_db import connect as shared_connect, get_item_by_id, update_inventory_item
+from reconciliation import build_reconciliation_report
+from manual_linking import build_shared_update_payload, get_manual_link_context, manual_link_listing
 
 DB_PATH = Path("ebay_tracker.db")
 
@@ -427,17 +429,7 @@ with get_conn() as conn:
                     data['shared_item_id'] = shared_id
                     st.info(f"Linked to shared inventory: {shared_id}")
                     # Update shared inventory with sale data
-                    shared_update = {
-                        'listing_status': 'listed' if data['status'] in ['listed', 'sold'] else 'ready_to_list',
-                        'list_date': data.get('list_date'),
-                        'list_price': data.get('list_price'),
-                        'sold_price': data.get('sold_price'),
-                        'sold_date': data.get('sold_date'),
-                        'shipping_cost': data.get('shipping_cost_seller', 0.0),
-                        'marketplace_fees': data.get('ebay_fees', 0.0),
-                        'ebay_item_id': data.get('ebay_item_id'),
-                    }
-                    update_inventory_item(shared_id, shared_update)
+                    update_inventory_item(shared_id, build_shared_update_payload(data))
                 else:
                     st.warning("No confident match in shared inventory. Manual linking may be needed.")
                 upsert(conn, data, edit_id if mode == "Edit existing" else None)
@@ -569,4 +561,198 @@ with get_conn() as conn:
                     """)
                     conn.commit()
                     st.success("Duplicates removed.")
+
+        # ---------- Reconciliation ----------
+        st.subheader("Reconciliation")
+        st.caption("Read-only comparison of ebay_tracker.db against shared_inventory.db.")
+
+        try:
+            report = build_reconciliation_report(DB_PATH)
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Unlinked Listings", report["counts"]["unlinked_listings"])
+            c2.metric("Linked Mismatches", report["counts"]["linked_sale_state_mismatches"])
+            c3.metric("Shared Purchased/RTL Unlinked", report["counts"]["shared_unlinked_purchases"])
+            c4.metric("Unique Match Candidates", report["counts"]["unresolved_unique_candidates"])
+            c5.metric("Ambiguous Candidates", report["counts"]["ambiguous_candidates"])
+
+            with st.expander("Unlinked listings", expanded=True):
+                st.caption("Listings in ebay_tracker with no shared_item_id.")
+                st.dataframe(
+                    report["unlinked_listings"][
+                        [
+                            "id",
+                            "sku",
+                            "title",
+                            "status",
+                            "list_price",
+                            "sold_price",
+                            "sold_date",
+                            "ebay_item_id",
+                            "last_updated",
+                        ]
+                    ].fillna(""),
+                    use_container_width=True,
+                )
+
+            with st.expander("Linked listings with sale-state mismatches", expanded=True):
+                st.caption("Compares linked listings against shared inventory by shared_item_id.")
+                st.dataframe(report["linked_sale_state_mismatches"].fillna(""), use_container_width=True)
+
+            with st.expander("Shared inventory purchased or ready_to_list but never linked", expanded=True):
+                st.caption("Shared inventory rows in pre-list states with no matching shared_item_id in listings.")
+                st.dataframe(
+                    report["shared_unlinked_purchases"][
+                        [
+                            "item_id",
+                            "sku",
+                            "title",
+                            "purchase_date",
+                            "listing_status",
+                            "list_price",
+                            "sold_price",
+                            "ebay_item_id",
+                            "updated_at",
+                        ]
+                    ].fillna(""),
+                    use_container_width=True,
+                )
+
+            with st.expander("Matching opportunities", expanded=False):
+                st.caption("Read-only detection using the current exact-match signals on purchased shared inventory.")
+                st.write("Unique candidates")
+                st.dataframe(report["unresolved_unique_candidates"].fillna(""), use_container_width=True)
+                st.write("Ambiguous candidates")
+                st.dataframe(report["ambiguous_candidates"].fillna(""), use_container_width=True)
+                st.write("All unlinked listing match scans")
+                st.dataframe(report["match_opportunities"].fillna(""), use_container_width=True)
+
+            manual_feedback = st.session_state.pop("manual_link_feedback", None)
+            if manual_feedback:
+                level, message = manual_feedback
+                if level == "success":
+                    st.success(message)
+                elif level == "error":
+                    st.error(message)
+                else:
+                    st.info(message)
+
+            with st.expander("Manual link one listing", expanded=False):
+                unlinked_rows = report["unlinked_listings"]
+                if unlinked_rows.empty:
+                    st.info("No unlinked listings available for manual linking.")
+                else:
+                    listing_options = unlinked_rows[["id", "sku", "title", "ebay_item_id"]].copy()
+                    listing_ids = listing_options["id"].astype(int).tolist()
+
+                    def _listing_label(listing_id: int) -> str:
+                        row = listing_options[listing_options["id"] == listing_id].iloc[0]
+                        sku = row["sku"] if pd.notna(row["sku"]) and row["sku"] else "no-sku"
+                        ebay_item_id = row["ebay_item_id"] if pd.notna(row["ebay_item_id"]) and row["ebay_item_id"] else "no-ebay-id"
+                        title = row["title"] if pd.notna(row["title"]) and row["title"] else "untitled"
+                        return f"[{listing_id}] {sku} | {ebay_item_id} | {title}"
+
+                    selected_listing_id = st.selectbox(
+                        "Select one unlinked listing",
+                        listing_ids,
+                        format_func=_listing_label,
+                        key="manual_link_listing_id",
+                    )
+
+                    try:
+                        manual_context = get_manual_link_context(selected_listing_id, DB_PATH)
+                        listing_summary_df = pd.DataFrame([manual_context["listing"]])
+                        st.caption("Selected listing")
+                        st.dataframe(listing_summary_df.fillna(""), use_container_width=True)
+
+                        candidate_cols = [
+                            "item_id",
+                            "title",
+                            "purchase_date",
+                            "lot_number",
+                            "total_purchase_cost",
+                            "sku",
+                            "ebay_item_id",
+                            "listing_status",
+                            "match_reasons",
+                            "match_score",
+                        ]
+                        suggested_candidates = manual_context["suggested_candidates"]
+                        fallback_candidates = manual_context["fallback_candidates"]
+
+                        st.caption("Suggested shared inventory candidates")
+                        if suggested_candidates.empty:
+                            st.info("No suggested candidates were detected from exact SKU, exact eBay item ID, or title overlap.")
+                        else:
+                            st.dataframe(suggested_candidates[candidate_cols].fillna(""), use_container_width=True)
+
+                        show_additional = st.checkbox(
+                            "Show additional eligible shared inventory rows",
+                            key="manual_link_show_additional",
+                        )
+                        if show_additional:
+                            st.caption("Additional eligible shared inventory rows (up to 50 recent records)")
+                            st.dataframe(fallback_candidates[candidate_cols].fillna(""), use_container_width=True)
+
+                        option_source = suggested_candidates if not suggested_candidates.empty else fallback_candidates
+                        combined_candidates = pd.concat([suggested_candidates, fallback_candidates], ignore_index=True)
+                        combined_candidates = combined_candidates.drop_duplicates(subset=["item_id"]).reset_index(drop=True)
+                        if combined_candidates.empty:
+                            st.warning("No eligible shared inventory rows are available for manual linking.")
+                        else:
+                            candidate_ids = [""] + combined_candidates["item_id"].astype(str).tolist()
+
+                            def _candidate_label(item_id: str) -> str:
+                                if not item_id:
+                                    return "Select a shared inventory record"
+                                row = combined_candidates[combined_candidates["item_id"] == item_id].iloc[0]
+                                cost = row["total_purchase_cost"]
+                                cost_text = f"${float(cost):,.2f}" if pd.notna(cost) else "n/a"
+                                reasons = row["match_reasons"] if pd.notna(row["match_reasons"]) and row["match_reasons"] else "manual_review"
+                                lot_number = row["lot_number"] if pd.notna(row["lot_number"]) and row["lot_number"] else "no-lot"
+                                purchase_date = row["purchase_date"] if pd.notna(row["purchase_date"]) and row["purchase_date"] else "no-date"
+                                title = row["title"] if pd.notna(row["title"]) and row["title"] else "untitled"
+                                return f"{item_id} | {purchase_date} | {lot_number} | {cost_text} | {reasons} | {title}"
+
+                            selected_shared_item_id = st.selectbox(
+                                "Choose the shared inventory record to link",
+                                candidate_ids,
+                                format_func=_candidate_label,
+                                key="manual_link_shared_item_id",
+                            )
+                            sync_shared = st.checkbox(
+                                "Sync current listing sale/list data to shared inventory after linking",
+                                value=True,
+                                key="manual_link_sync_shared",
+                            )
+                            confirm_manual_link = st.checkbox(
+                                "I confirm that this listing and shared inventory record refer to the same item",
+                                key="manual_link_confirm",
+                            )
+                            action_col1, action_col2 = st.columns(2)
+                            with action_col1:
+                                if st.button("Confirm manual link", key="manual_link_confirm_button"):
+                                    if not selected_shared_item_id:
+                                        st.warning("Invalid selection: choose a shared inventory record.")
+                                    elif not confirm_manual_link:
+                                        st.warning("Explicit confirmation is required before assigning shared_item_id.")
+                                    else:
+                                        ok, message = manual_link_listing(
+                                            conn,
+                                            int(selected_listing_id),
+                                            selected_shared_item_id,
+                                            sync_shared=sync_shared,
+                                        )
+                                        st.session_state["manual_link_feedback"] = ("success" if ok else "error", message)
+                                        st.rerun()
+                            with action_col2:
+                                if st.button("Cancel", key="manual_link_cancel_button"):
+                                    st.info("Manual link canceled.")
+                    except ValueError as exc:
+                        st.error(str(exc))
+
+            st.caption(
+                f"Compared listing data from {report['ebay_db_path']} against shared inventory at {report['shared_db_path']}."
+            )
+        except FileNotFoundError as exc:
+            st.warning(str(exc))
 
